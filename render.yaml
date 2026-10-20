@@ -1,7 +1,7 @@
 # Render Blueprint: New > Blueprint > pick this repo. Fill the secrets it asks for.
 services:
   - type: web
-    name: ghostwake-api
+    name: lightcult-api
     runtime: python
     plan: free
     rootDir: backend
