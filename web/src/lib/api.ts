@@ -1,4 +1,4 @@
-// Thin client for the GhostWake API. In dev Vite proxies /api; in production
+// Thin client for the Lightcult (GhostWake) API. In dev Vite proxies /api; in production
 // VITE_API_URL points at the Render service.
 
 const BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
@@ -68,6 +68,45 @@ export interface CopilotAnswer {
   note?: string;
 }
 
+export interface PatrolBaseInfo {
+  lat: number;
+  lon: number;
+  description: string;
+  asset: string;
+  default_speed_knots: number;
+}
+
+export interface InterceptResult {
+  possible: boolean;
+  patrol_base: string;
+  patrol_base_lat: number;
+  patrol_base_lon: number;
+  patrol_speed_knots: number;
+  target_lat: number;
+  target_lon: number;
+  target_speed_knots: number;
+  target_heading_deg: number;
+  time_minutes: number | null;
+  intercept_lat: number | null;
+  intercept_lon: number | null;
+  patrol_bearing_deg: number | null;
+  distance_km: number | null;
+  distance_nm: number | null;
+  imbl_status: "indian_waters" | "near_imbl" | "crossed_imbl" | null;
+  imbl_distance_km: number | null;
+  tactical_summary: string;
+}
+
+export interface InterceptParams {
+  alert_id?: string;
+  target_lat?: number;
+  target_lon?: number;
+  target_speed_knots?: number;
+  target_heading_deg?: number;
+  patrol_base?: string;
+  patrol_speed_knots?: number;
+}
+
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(`${BASE}${path}`);
   if (!r.ok) throw new Error(`${r.status} on ${path}`);
@@ -100,6 +139,8 @@ export const api = {
       "X-Analyst": analyst || "analyst",
     }),
   ask: (question: string, alert_id?: string) => post<CopilotAnswer>("/api/copilot", { question, alert_id }),
+  tacticalBases: () => get<Record<string, PatrolBaseInfo>>("/api/tactical/bases"),
+  calculateIntercept: (params: InterceptParams) => post<InterceptResult>("/api/tactical/intercept", params),
   reportUrl: (id: string) => `${BASE}/api/alerts/${id}/report`,
   streamUrl: () => `${BASE}/api/stream`,
 };

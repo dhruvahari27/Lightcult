@@ -41,6 +41,7 @@ from ghostwake.db import (
     utc,
 )
 from ghostwake.detect.sar import chip
+from ghostwake.tactical import PATROL_BASES, calculate_intercept
 from ghostwake.zones import AOI, zones_geojson
 
 settings = get_settings()
@@ -254,6 +255,76 @@ class AskIn(BaseModel):
 def copilot(body: AskIn, request: Request, s: Session = Depends(db)):
     rate_limit(request, per_minute=settings.copilot_per_minute)
     return agent.answer(s, body.question, body.alert_id)
+
+
+# --------------------------------------------------------------------------- tactical intercept
+
+class InterceptIn(BaseModel):
+    alert_id: str | None = None
+    target_lat: float | None = None
+    target_lon: float | None = None
+    target_speed_knots: float = 12.0
+    target_heading_deg: float = 90.0
+    patrol_base: str = "ICGS Mandapam"
+    custom_patrol_lat: float | None = None
+    custom_patrol_lon: float | None = None
+    patrol_speed_knots: float = 30.0
+
+
+@app.get("/api/tactical/bases")
+def tactical_bases():
+    return PATROL_BASES
+
+
+@app.post("/api/tactical/intercept")
+def tactical_intercept(body: InterceptIn, s: Session = Depends(db)):
+    t_lat, t_lon = body.target_lat, body.target_lon
+    spd = body.target_speed_knots
+    hdg = body.target_heading_deg
+
+    if body.alert_id:
+        a = s.get(AlertRow, body.alert_id)
+        if a is None:
+            raise HTTPException(404, f"Alert {body.alert_id} not found")
+        if t_lat is None or t_lon is None:
+            t_lat, t_lon = a.lat, a.lon
+        ev = a.evidence or {}
+        if body.target_speed_knots == 12.0 and "implied_knots" in ev:
+            spd = float(ev["implied_knots"])
+
+    if t_lat is None or t_lon is None:
+        raise HTTPException(422, "target_lat and target_lon or a valid alert_id must be provided")
+
+    res = calculate_intercept(
+        target_lat=t_lat,
+        target_lon=t_lon,
+        target_speed_knots=spd,
+        target_heading_deg=hdg,
+        patrol_base_name=body.patrol_base,
+        custom_patrol_lat=body.custom_patrol_lat,
+        custom_patrol_lon=body.custom_patrol_lon,
+        patrol_speed_knots=body.patrol_speed_knots,
+    )
+    return {
+        "possible": res.possible,
+        "patrol_base": res.patrol_base,
+        "patrol_base_lat": res.patrol_base_lat,
+        "patrol_base_lon": res.patrol_base_lon,
+        "patrol_speed_knots": res.patrol_speed_knots,
+        "target_lat": res.target_lat,
+        "target_lon": res.target_lon,
+        "target_speed_knots": res.target_speed_knots,
+        "target_heading_deg": res.target_heading_deg,
+        "time_minutes": res.time_minutes,
+        "intercept_lat": res.intercept_lat,
+        "intercept_lon": res.intercept_lon,
+        "patrol_bearing_deg": res.patrol_bearing_deg,
+        "distance_km": res.distance_km,
+        "distance_nm": res.distance_nm,
+        "imbl_status": res.imbl_status,
+        "imbl_distance_km": res.imbl_distance_km,
+        "tactical_summary": res.tactical_summary,
+    }
 
 
 # --------------------------------------------------------------------------- live stream

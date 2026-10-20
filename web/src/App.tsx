@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "./lib/api";
+import { api, type InterceptResult } from "./lib/api";
 import { secondsSince } from "./lib/tracks";
 import { useTheme, type ThemePref } from "./lib/theme";
+import { sound } from "./lib/sound";
 import { MapView } from "./components/MapView";
 import { Queue, applyFilter, type QueueFilter } from "./components/Queue";
 import { CasePanel } from "./components/CasePanel";
@@ -38,6 +39,8 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [mobileView, setMobileView] = useState<"queue" | "map">("queue");
+  const [soundOn, setSoundOn] = useState(() => sound.isEnabled());
+  const [interceptResult, setInterceptResult] = useState<InterceptResult | null>(null);
 
   const selected = useQuery({
     queryKey: ["alert", selectedId],
@@ -86,6 +89,7 @@ export default function App() {
     es.addEventListener("alert.created", (e) => {
       const { id } = JSON.parse((e as MessageEvent).data);
       setFresh((s) => new Set(s).add(id));
+      sound.sonarPing();
       refresh();
     });
     es.addEventListener("alert.reviewed", refresh);
@@ -94,26 +98,36 @@ export default function App() {
 
   const select = (id: string) => {
     setSelectedId(id);
+    setInterceptResult(null);
     setMobileView("queue");
+    sound.blip();
     setFresh((s) => {
       const n = new Set(s);
       n.delete(id);
       return n;
     });
     const a = alerts.data?.find((x) => x.id === id);
-    if (a && t0) setPlayhead(Math.max(0, secondsSince(t0, a.start)));
+    if (a) {
+      if (a.kind === "imbl_crossing" || a.severity === "critical" || a.severity === "high") {
+        sound.alertKlaxon();
+      }
+      if (t0) setPlayhead(Math.max(0, secondsSince(t0, a.start)));
+    }
   };
 
   // j / k to walk the queue, Escape to close the case. Analysts live on the keyboard.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       const list = applyFilter(alerts.data ?? [], filter);
       const i = list.findIndex((a) => a.id === selectedId);
       if (e.key === "j" && list.length) select(list[Math.min(list.length - 1, i + 1)].id);
       if (e.key === "k" && list.length) select(list[Math.max(0, i - 1)].id);
-      if (e.key === "Escape") setSelectedId(null);
+      if (e.key === "Escape") {
+        setSelectedId(null);
+        setInterceptResult(null);
+      }
       if (e.key === " " && e.target === document.body) {
         e.preventDefault();
         setPlaying((p) => !p);
@@ -135,7 +149,7 @@ export default function App() {
             <path d="M5 21c3 0 3-2 6-2s3 2 6 2 3-2 6-2" fill="none" style={{ stroke: "var(--sodium)" }} strokeWidth="2" strokeLinecap="round" strokeDasharray="3 3" />
             <circle cx="16" cy="12" r="5" fill="none" style={{ stroke: "var(--paper)" }} strokeWidth="2" />
           </svg>
-          <span className="wordmark">GhostWake</span>
+          <span className="wordmark">Lightcult</span>
         </div>
         <p className="context">
           Gulf of Mannar and approaches
@@ -146,6 +160,18 @@ export default function App() {
             {run.counts.vessels} vessels on AIS, {run.counts.scenes} radar passes, {run.cleaning.duplicates + run.cleaning.bad_position} bad rows removed
           </p>
         )}
+
+        <div className="tactical-sound-toggle">
+          <button
+            className={`sound-btn ${soundOn ? "active" : "muted"}`}
+            onClick={() => setSoundOn(sound.toggle())}
+            title={soundOn ? "Mute tactical audio alerts" : "Enable tactical audio alerts"}
+            aria-label="Toggle tactical audio"
+          >
+            {soundOn ? "🔊 Audio On" : "🔇 Muted"}
+          </button>
+        </div>
+
         <div className="theme-switch" role="group" aria-label="Colour theme">
           {THEMES.map((t) => (
             <button
@@ -167,13 +193,21 @@ export default function App() {
       <aside className="side">
         {failed ? (
           <div className="state-msg">
-            <p>Can't reach the GhostWake API.</p>
+            <p>Can't reach the Lightcult API.</p>
             <p className="case-fine">Check that the backend is running and that VITE_API_URL points at it, then reload.</p>
           </div>
         ) : loading ? (
           <div className="state-msg"><p>Loading tracks and alerts</p></div>
         ) : selected.data ? (
-          <CasePanel alert={selected.data} names={names} onClose={() => setSelectedId(null)} />
+          <CasePanel
+            alert={selected.data}
+            names={names}
+            onClose={() => {
+              setSelectedId(null);
+              setInterceptResult(null);
+            }}
+            onInterceptCalculated={setInterceptResult}
+          />
         ) : (
           <Queue
             alerts={alerts.data ?? []}
@@ -199,6 +233,7 @@ export default function App() {
           playhead={playhead}
           onPick={select}
           theme={theme}
+          interceptResult={interceptResult}
         />
         <div className="legend" aria-label="Map key">
           <span><i className="k k-ship" /> Ship on AIS</span>
@@ -206,6 +241,7 @@ export default function App() {
           <span><i className="k k-dark" /> Radar, no AIS</span>
           <span><i className="k k-wake" /> Silent stretch</span>
           <span><i className="k k-imbl" /> IMBL (approx.)</span>
+          {interceptResult?.possible && <span><i className="k k-intercept" /> Intercept Vector</span>}
         </div>
         {t0 && (
           <Timeline

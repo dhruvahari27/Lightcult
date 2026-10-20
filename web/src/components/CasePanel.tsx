@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type AlertDetail, type CopilotAnswer } from "../lib/api";
+import { api, type AlertDetail, type CopilotAnswer, type InterceptResult } from "../lib/api";
 import { KIND_LABEL, SEVERITY_LABEL, coord, hoursBetween, utcTime } from "../lib/vocab";
 import { Glyph } from "./Glyph";
 import { SarChip } from "./SarChip";
+import { InterceptCalculator } from "./InterceptCalculator";
 
 const store = {
   get(k: string) {
@@ -44,9 +45,10 @@ interface Props {
   alert: AlertDetail;
   names: Map<string, string>;
   onClose: () => void;
+  onInterceptCalculated?: (result: InterceptResult | null) => void;
 }
 
-export function CasePanel({ alert: a, names, onClose }: Props) {
+export function CasePanel({ alert: a, names, onClose, onInterceptCalculated }: Props) {
   const qc = useQueryClient();
   const [note, setNote] = useState("");
   const [token, setToken] = useState(() => store.get("gw-token"));
@@ -137,6 +139,16 @@ export function CasePanel({ alert: a, names, onClose }: Props) {
         </dl>
       </section>
 
+      {/* Tactical Coast Guard Intercept Calculator */}
+      <InterceptCalculator
+        alert={a}
+        onInterceptCalculated={onInterceptCalculated}
+        onAskCopilot={(q) => {
+          setQuestion(q);
+          ask.mutate(q);
+        }}
+      />
+
       <section className="case-block decide">
         <h3>Decision</h3>
         <label className="field">
@@ -214,6 +226,7 @@ export function CasePanel({ alert: a, names, onClose }: Props) {
         </form>
         <div className="ask-suggest">
           <button onClick={() => ask.mutate("Brief me on this alert")}>Brief me</button>
+          <button onClick={() => ask.mutate("Calculate intercept from Mandapam")}>Intercept calculation</button>
           {a.mmsi && <button onClick={() => ask.mutate(`What else do we know about ${a.mmsi}?`)}>Vessel history</button>}
         </div>
         {ask.isError && <p className="error">{(ask.error as Error).message}</p>}

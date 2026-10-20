@@ -2,7 +2,10 @@
 
 import math
 
-import h3
+try:
+    import h3
+except ImportError:
+    h3 = None
 
 EARTH_KM = 6371.0088
 KM_PER_NM = 1.852

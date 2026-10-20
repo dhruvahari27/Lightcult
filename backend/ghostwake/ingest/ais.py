@@ -9,7 +9,10 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 
-import h3
+try:
+    import h3
+except ImportError:
+    h3 = None
 import numpy as np
 import pandas as pd
 

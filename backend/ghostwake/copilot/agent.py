@@ -27,7 +27,7 @@ from ghostwake.copilot import tools
 
 ACTION_WORDS = re.compile(
     r"\b(escalate|dismiss|delete|remove|close|resolve|notify|send|alert the|arrest|board|"
-    r"intercept|dispatch|update the|change the status|mark as)\b",
+    r"dispatch|send interceptor|deploy interceptor|update the|change the status|mark as)\b",
     re.I,
 )
 NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?")
@@ -160,7 +160,14 @@ def _offline(s: Session, question: str, alert_id: str | None) -> dict:
     target = alert_id or (ALERT_ID.search(question).group(0) if ALERT_ID.search(question) else None)
     mmsi = MMSI.search(question)
 
-    if target:
+    if target and any(w in q for w in ("intercept", "rendezvous", "patrol", "eta", "coast guard", "catch")):
+        base = "ICGS Thoothukudi" if "thoothukudi" in q or "tuticorin" in q else "ICGS Mandapam"
+        sol = use("intercept_solution", alert_id=target, patrol_base=base)
+        if "error" in sol:
+            text = sol["error"]
+        else:
+            text = sol["tactical_summary"]
+    elif target:
         a = use("get_alert", alert_id=target)
         text = _brief_alert(a) if a else f"No alert with id {target}."
     elif mmsi:

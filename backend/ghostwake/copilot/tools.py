@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ghostwake.db import AlertRow, Review, Vessel, utc
+from ghostwake.tactical import PATROL_BASES, calculate_intercept
 from ghostwake.zones import BAN_WINDOWS, IMBL, ZONES
 
 
@@ -70,6 +71,49 @@ def area_rules() -> dict:
         "imbl_points": len(IMBL),
         "protected_areas": [z.name for z in ZONES],
         "monsoon_ban": {k: f"{a[1]:02d}/{a[0]:02d} to {b[1]:02d}/{b[0]:02d}" for k, (a, b) in BAN_WINDOWS.items()},
+        "patrol_bases": list(PATROL_BASES.keys()),
+    }
+
+
+def intercept_solution(
+    s: Session,
+    alert_id: str,
+    patrol_base: str = "ICGS Mandapam",
+    patrol_speed: float = 30.0,
+    target_speed: float | None = None,
+    target_heading: float | None = None,
+) -> dict:
+    a = s.get(AlertRow, alert_id)
+    if a is None:
+        return {"error": f"Alert {alert_id} not found"}
+
+    spd = target_speed if target_speed is not None else float(a.evidence.get("implied_knots") or 10.0)
+    hdg = target_heading if target_heading is not None else 90.0
+
+    res = calculate_intercept(
+        target_lat=a.lat,
+        target_lon=a.lon,
+        target_speed_knots=spd,
+        target_heading_deg=hdg,
+        patrol_base_name=patrol_base,
+        patrol_speed_knots=patrol_speed,
+    )
+    return {
+        "alert_id": alert_id,
+        "possible": res.possible,
+        "patrol_base": res.patrol_base,
+        "patrol_speed_knots": res.patrol_speed_knots,
+        "target_speed_knots": res.target_speed_knots,
+        "target_heading_deg": res.target_heading_deg,
+        "time_minutes": res.time_minutes,
+        "intercept_lat": res.intercept_lat,
+        "intercept_lon": res.intercept_lon,
+        "patrol_bearing_deg": res.patrol_bearing_deg,
+        "distance_km": res.distance_km,
+        "distance_nm": res.distance_nm,
+        "imbl_status": res.imbl_status,
+        "imbl_distance_km": res.imbl_distance_km,
+        "tactical_summary": res.tactical_summary,
     }
 
 
@@ -104,6 +148,15 @@ SCHEMAS = [
         "description": "Boundaries, protected areas and fishing-ban dates in the demo area.",
         "parameters": {"type": "object", "properties": {}},
     }},
+    {"type": "function", "function": {
+        "name": "intercept_solution",
+        "description": "Calculate Coast Guard patrol craft intercept ETA, vector, coordinates, and IMBL boundary safety.",
+        "parameters": {"type": "object", "properties": {
+            "alert_id": {"type": "string", "description": "The alert to intercept"},
+            "patrol_base": {"type": "string", "description": "Patrol station name (e.g. ICGS Mandapam, ICGS Thoothukudi)"},
+            "patrol_speed": {"type": "number", "description": "Patrol boat speed in knots (e.g. 30)"},
+        }, "required": ["alert_id"]},
+    }},
 ]
 
 
@@ -116,4 +169,11 @@ def call(s: Session, name: str, args: dict) -> object:
         return vessel_profile(s, str(args.get("mmsi", "")))
     if name == "area_rules":
         return area_rules()
+    if name == "intercept_solution":
+        return intercept_solution(
+            s,
+            alert_id=str(args.get("alert_id", "")),
+            patrol_base=str(args.get("patrol_base", "ICGS Mandapam")),
+            patrol_speed=float(args.get("patrol_speed", 30.0)),
+        )
     return {"error": f"unknown tool {name}"}

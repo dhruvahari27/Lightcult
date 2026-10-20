@@ -5,7 +5,7 @@ import { MapboxOverlay } from "@deck.gl/mapbox";
 import { PathLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import { TripsLayer } from "@deck.gl/geo-layers";
 import { PathStyleExtension, type PathStyleExtensionProps } from "@deck.gl/extensions";
-import type { AlertDetail, AlertSummary, Detection, Track } from "../lib/api";
+import type { AlertDetail, AlertSummary, Detection, InterceptResult, Track } from "../lib/api";
 import { positionAt, secondsSince } from "../lib/tracks";
 
 // Colours are repeated from styles.css because deck.gl wants RGB arrays, not CSS variables.
@@ -81,9 +81,22 @@ interface Props {
   playhead: number;
   onPick: (alertId: string) => void;
   theme: "light" | "dark";
+  interceptResult?: InterceptResult | null;
 }
 
-export function MapView({ tracks, t0, detections, alerts, zones, selected, ghostLine, playhead, onPick, theme }: Props) {
+export function MapView({
+  tracks,
+  t0,
+  detections,
+  alerts,
+  zones,
+  selected,
+  ghostLine,
+  playhead,
+  onPick,
+  theme,
+  interceptResult,
+}: Props) {
   const c = PALETTES[theme];
   const themeRef = useRef(theme);
   themeRef.current = theme;
@@ -110,93 +123,139 @@ export function MapView({ tracks, t0, detections, alerts, zones, selected, ghost
       style: styleFor(c),
       center: [78.6, 8.4],
       zoom: 6.6,
-      // The basemap's own TileJSON already carries the OpenFreeMap / OpenStreetMap credit,
-      // so we don't add our own copy of it.
       attributionControl: { compact: true },
       dragRotate: false,
     });
     m.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     const ov = new MapboxOverlay({ interleaved: false, layers: [] });
     m.addControl(ov);
-    // The style is parsed even when the basemap tiles can't be fetched, so our own
-    // sources are there to fill as soon as it is.
-    // No basemap (offline, or tiles blocked on this network): paint the whole field as sea
-    // instead of land, so the tracks still sit on water.
-    m.on("error", (e: { sourceId?: string }) => {
-      if (e.sourceId === "omt" && m.getLayer("land")) {
-        m.setPaintProperty("land", "background-color", PALETTES[themeRef.current].sea);
-      }
-    });
-    // A theme switch replaces the whole style, which empties our zones source, so
-    // refill it every time the style changes.
-    m.on("styledata", () => {
+
+    m.on("load", () => {
       ready.current = true;
       geo.current();
+      draw.current();
     });
-    // Keep the credit folded into its (i) button so it never sits on top of the timeline.
-    m.once("load", () => {
-      box.current?.querySelector(".maplibregl-ctrl-attrib")?.classList.remove("maplibregl-compact-show");
-    });
-    // The map lives in a panel that can be hidden on phones; follow its real size.
-    const ro = new ResizeObserver(() => m.resize());
-    ro.observe(box.current);
+
     map.current = m;
     overlay.current = ov;
     return () => {
-      ready.current = false;
-      ro.disconnect();
       m.remove();
+      map.current = null;
+      overlay.current = null;
+      ready.current = false;
     };
   }, []);
 
+  // When theme changes, rewrite the base style without replacing the map or the overlay.
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready.current) return;
+    m.setStyle(styleFor(c), { diff: true });
+    m.once("styledata", () => {
+      geo.current();
+      draw.current();
+    });
+  }, [theme]);
+
+  // Keep zones in sync on the maplibre layer.
   geo.current = () => {
     const m = map.current;
     if (!m || !ready.current) return;
-    (m.getSource("zones") as GeoJSONSource | undefined)?.setData(zones ?? EMPTY);
+    const src = m.getSource("zones") as GeoJSONSource | undefined;
+    if (src && zones) src.setData(zones);
   };
-
   useEffect(() => geo.current(), [zones]);
 
-  const firstTheme = useRef(true);
+  // Fly to an alert when chosen.
   useEffect(() => {
-    if (firstTheme.current) {
-      firstTheme.current = false;
-      return;
-    }
-    map.current?.setStyle(styleFor(c), { diff: false });
-  }, [theme]);
-
-  useEffect(() => {
-    if (!selected || !map.current) return;
-    const opts = { center: [selected.lon, selected.lat] as [number, number], zoom: Math.max(map.current.getZoom(), 8.2) };
-    reduceMotion ? map.current.jumpTo(opts) : map.current.flyTo({ ...opts, speed: 1.4 });
+    if (!map.current || !selected) return;
+    map.current.flyTo({ center: [selected.lon, selected.lat], zoom: 8.5, duration: 800 });
   }, [selected?.id]);
 
-  // Layers are rebuilt on every change. With a few thousand points this is cheap,
-  // and it keeps the drawing logic in one readable function.
+  // Deck.gl redraw on time tick or selection.
   draw.current = () => {
-    if (!overlay.current) return;
+    const ov = overlay.current;
+    if (!ov) return;
+
     const focus = new Set<string>();
     if (selected?.mmsi) focus.add(selected.mmsi);
-    const other = selected?.evidence?.other_mmsi;
-    if (other) focus.add(other);
-
-    const heads = tracks
-      .map((tr) => ({ mmsi: tr.mmsi, at: positionAt(tr, playhead) }))
-      .filter((h): h is { mmsi: string; at: [number, number] } => h.at !== null);
-
-    const dets = t0
-      ? detections.map((d) => ({ ...d, near: Math.abs(secondsSince(t0, d.ts) - playhead) < 3 * 3600 }))
-      : [];
     const p = pulse.current;
 
-    overlay.current.setProps({
+    const heads: { mmsi: string; at: [number, number] }[] = [];
+    for (const tr of tracks) {
+      const at = positionAt(tr, playhead);
+      if (at) heads.push({ mmsi: tr.mmsi, at });
+    }
+
+    const dets = detections.map((d) => ({
+      ...d,
+      near: t0 ? Math.abs(secondsSince(t0, d.ts) - playhead) < 30 * 60 : false,
+    }));
+
+    const interceptLayers = [];
+    if (
+      interceptResult &&
+      interceptResult.possible &&
+      interceptResult.intercept_lon != null &&
+      interceptResult.intercept_lat != null
+    ) {
+      interceptLayers.push(
+        new PathLayer({
+          id: "intercept-vector",
+          data: [
+            {
+              path: [
+                [interceptResult.patrol_base_lon, interceptResult.patrol_base_lat],
+                [interceptResult.intercept_lon, interceptResult.intercept_lat],
+              ],
+            },
+          ],
+          getPath: (d) => d.path,
+          getColor: [0, 220, 255, 230],
+          getWidth: 2.5,
+          widthUnits: "pixels",
+          getDashArray: [6, 4],
+          extensions: [new PathStyleExtension({ dash: true })],
+        }),
+        new ScatterplotLayer({
+          id: "intercept-point",
+          data: [{ lon: interceptResult.intercept_lon, lat: interceptResult.intercept_lat }],
+          getPosition: (d: { lon: number; lat: number }) => [d.lon, d.lat],
+          radiusUnits: "pixels",
+          getRadius: 8 + 4 * p,
+          stroked: true,
+          filled: true,
+          getFillColor: [0, 220, 255, 120],
+          getLineColor: [0, 240, 255, 255],
+          getLineWidth: 2,
+        }),
+        new TextLayer({
+          id: "intercept-label",
+          data: [
+            {
+              at: [interceptResult.intercept_lon, interceptResult.intercept_lat],
+              text: `🎯 INTERCEPT (${interceptResult.time_minutes?.toFixed(0)}m)`,
+            },
+          ],
+          getPosition: (d: { at: [number, number] }) => d.at,
+          getText: (d: { text: string }) => d.text,
+          getColor: [0, 240, 255, 255],
+          getSize: 12,
+          fontFamily: "Archivo, system-ui, sans-serif",
+          fontWeight: 700,
+          getTextAnchor: "start",
+          getPixelOffset: [12, -4],
+        })
+      );
+    }
+
+    ov.setProps({
       layers: [
         new PathLayer<Track>({
-          id: "history",
+          id: "tracks",
           data: tracks,
           getPath: (d) => d.path,
-          getColor: (d) => (focus.has(d.mmsi) ? [...c.ink, 150] : [...c.seaglass, c.trackAlpha]),
+          getColor: (d) => (focus.has(d.mmsi) ? [...c.seaglass, 240] : [...c.seaglass, c.trackAlpha]),
           getWidth: (d) => (focus.has(d.mmsi) ? 1.6 : 1),
           widthUnits: "pixels",
           updateTriggers: { getColor: [...focus, theme], getWidth: [...focus] },
@@ -275,6 +334,7 @@ export function MapView({ tracks, t0, detections, alerts, zones, selected, ghost
           getLineWidth: 1.5,
           lineWidthUnits: "pixels",
         }),
+        ...interceptLayers,
         new TextLayer({
           id: "ports",
           data: PORTS,
@@ -291,7 +351,9 @@ export function MapView({ tracks, t0, detections, alerts, zones, selected, ghost
     });
   };
 
-  useEffect(() => draw.current(), [tracks, t0, detections, selected, ghostLine, playhead, byMmsi, byDetection, theme]);
+  useEffect(() => {
+    draw.current();
+  }, [tracks, t0, detections, selected, ghostLine, playhead, byMmsi, byDetection, theme, interceptResult]);
 
   // The one piece of ambient motion: unexplained radar blips breathe slowly.
   useEffect(() => {

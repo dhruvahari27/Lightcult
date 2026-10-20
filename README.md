@@ -1,18 +1,30 @@
-# GhostWake
+# Lightcult
 
-[![CI](https://github.com/Mahendr99ar/ghostwake/actions/workflows/ci.yml/badge.svg)](https://github.com/Mahendr99ar/ghostwake/actions/workflows/ci.yml)
-[![Refresh data](https://github.com/Mahendr99ar/ghostwake/actions/workflows/pipeline.yml/badge.svg)](https://github.com/Mahendr99ar/ghostwake/actions/workflows/pipeline.yml)
-
-**Live:** [ghostwake.vercel.app](https://ghostwake.vercel.app)
-**API:** [health](https://ghostwake-api.onrender.com/api/health) | [interactive docs](https://ghostwake-api.onrender.com/docs)
-
-> The API runs on Render's free plan and sleeps after 15 minutes without traffic. If the site says it can't reach the API, give it about a minute and refresh.
+Maritime intelligence and dark vessel surveillance for the Indian Ocean (Gulf of Mannar & Palk Bay).
 
 Ships can switch off their tracker. They can't hide their wake.
 
-GhostWake watches the Gulf of Mannar and Palk Bay, between the southern tip of India and Sri Lanka. It matches satellite radar detections against AIS ship positions to find vessels that went quiet, flags behaviour that deserves a second look, and warns Indian fishing boats before they drift across the International Maritime Boundary Line. Every alert waits for a person to review it. The software never acts on its own.
+Lightcult watches the Gulf of Mannar and Palk Bay, between the southern tip of India and Sri Lanka. It matches satellite radar detections against AIS ship positions to find vessels that went quiet, flags behaviour that deserves a second look, and warns Indian fishing boats before they drift across the International Maritime Boundary Line. Every alert waits for a person to review it. The software never acts on its own.
 
 ![SEA FALCON's 11-hour silence drawn as a dashed line inside the marine park](docs/screenshots/ais-gap-ghost-wake.png)
+
+## Distinct Tactical Features
+
+### 1. ⚡ Tactical Coast Guard Intercept Calculator
+When an alert or dark vessel is reviewed, operators can calculate optimal pursuit trajectories for Indian Coast Guard (ICG) patrol assets:
+- **Kinematic Intercept Solver**: Models quadratic rendezvous vectors for Fast Interceptor Craft (FIC) and Fast Patrol Vessels (FPV) stationed at forward operating bases (**ICGS Mandapam, ICGS Thoothukudi, ICGS Karaikal, ICGS Vizhinjam**).
+- **IMBL Boundary Clearance Check**: Evaluates whether the rendezvous point falls safely inside Indian territorial waters or if the target will cross the International Maritime Boundary Line before intercept is achieved.
+- **Dynamic Map Visualization**: Draws animated cyan intercept vectors, rendezvous waypoints, and ETA countdown badges on the live nautical chart.
+- **Analyst Copilot Integration**: Analysts can query the copilot (e.g. *"Calculate intercept from Mandapam"*) for instant tactical assessment.
+
+### 2. 🔊 Procedural Maritime Audio System
+A zero-dependency browser synthesizer built with the Web Audio API:
+- **Resonant Naval Sonar Ping**: Acoustic frequency sweep (1250 Hz → 780 Hz) on radar updates and new pipeline detections.
+- **Boundary Warning Klaxon**: Dual-frequency tactical alarm for IMBL crossings and high-threat dark vessels.
+- **Tactical Intercept Chime**: Ascending triad audio cue when an intercept solution is resolved.
+- **Mute Control**: Persistent audio state toggle in the top operations bar.
+
+---
 
 ## Why this area
 
@@ -22,7 +34,7 @@ Global tools such as [Global Fishing Watch](https://globalfishingwatch.org/map) 
 - The monsoon fishing ban starts on different dates on the east and west coasts, and a boat working through it is a different case from one that went quiet in open water.
 - A fisheries officer needs a case file that shows where each number came from, not just a red dot.
 
-GhostWake is built around those three things.
+Lightcult is built around those three things.
 
 ## What it flags
 
@@ -42,8 +54,9 @@ Each alert comes with:
 - its lineage: the pipeline run, the rule and thresholds used, the source records, and what the cleaner threw away on that run
 - an append-only review log, so a dismissed alert keeps the note that explains why
 - a printable case file
+- tactical intercept solver with Coast Guard base routing
 
-The copilot answers questions about alerts through four read-only tools. It refuses requests to act, and every number in its answer is checked against the data it looked up. It works without any language model (an offline writer builds the briefing), and can use any OpenAI-compatible endpoint if one is configured.
+The copilot answers questions about alerts through five read-only tools (including `intercept_solution`). It refuses requests to act, and every number in its answer is checked against the data it looked up. It works without any language model (an offline writer builds the briefing), and can use any OpenAI-compatible endpoint if one is configured.
 
 ## Results
 
@@ -59,8 +72,9 @@ Measured by the test suite on the seed-7 scenario:
 | Sea clutter raised as alerts | 0 of 6 |
 | Silent ship linked to its radar return | 1 of 1, no wrong links |
 | Warning time before the IMBL crossing | 53 minutes |
+| Tactical Intercept Calculation | Verified across stationary, moving, and boundary clearance tests |
 | Copilot eval cases (offline mode) | 13 of 13 |
-| Backend tests | 29 passing |
+| Backend tests | 33 passing |
 
 These numbers come from simulated data that was built to contain these behaviours. They show the logic does what it should. They say nothing yet about performance at sea; that needs real AIS and real Sentinel-1 scenes.
 
@@ -91,7 +105,7 @@ Public data             Processing                        Serving               
 SAR imagery   ----->    batch: ship detection    -.
 AIS tracks    ----->    stream: clean, rules     --+-->   fusion + risk  -->     FastAPI  -->  analyst console
 Zones, IMBL   ----->    (synthetic in the demo)  -'       Postgres               copilot       fishing-boat warnings
-                                                          event log              MCP server
+                                                          event log              MCP server    tactical intercept
 ```
 
 | Part | Stack | Hosted on |
@@ -101,14 +115,6 @@ Zones, IMBL   ----->    (synthetic in the demo)  -'       Postgres              
 | Web app | React 18, TypeScript, Vite, MapLibre GL, deck.gl, TanStack Query | [Vercel](https://vercel.com) (free) |
 | Basemap | OpenMapTiles vector tiles | [OpenFreeMap](https://openfreemap.org) |
 | CI and daily refresh | pytest, ruff, vitest, offline copilot evals | GitHub Actions |
-
-A few decisions worth knowing about:
-
-- **The pipeline is idempotent.** Alert ids are hashes of what they describe, so a rerun updates evidence and scores but never overwrites an analyst's decision. The second run in a row reports `alerts_created: 0`.
-- **Heavy work stays offline.** Radar detection is a batch job; the API only serves results, which is what lets it run on a free instance.
-- **Live updates** reach the browser as server-sent events from an `events` table, so there is no message broker to host.
-
-The reasoning behind these and the alert thresholds is written up in [docs/adr](docs/adr).
 
 ## Run it locally
 
@@ -143,47 +149,3 @@ cd web && npm test
 ```
 
 Keyboard: `j` and `k` move through the queue, `Esc` closes a case, `Space` plays the replay.
-
-## Deploying your own copy
-
-Everything runs on free tiers. [DEPLOY.md](DEPLOY.md) goes through it step by step: Neon for the database, Render for the API, Vercel for the web app, and a GitHub Actions secret for the daily refresh.
-
-## Project layout
-
-```
-backend/
-  ghostwake/
-    ingest/        synthetic scenario, AIS cleaning
-    anomalies/     one function per behaviour rule
-    fusion/        radar-to-AIS matching, dark-vessel identity
-    detect/        CA-CFAR detector, YOLO training script, radar chips
-    copilot/       read-only tools, LLM loop, offline writer, guardrails
-    api/           HTTP API, live stream, case file
-    risk.py        explainable scoring
-    pipeline.py    one full run
-    mcp_server.py  the same read-only tools over MCP
-  tests/  evals/
-web/src/
-  components/      MapView, Queue, CasePanel, Timeline, SarChip, Glyph
-  lib/             API client, track interpolation, theme, shared wording
-docs/
-  adr/             decision records
-  screenshots/
-```
-
-## Known limits
-
-- The data is simulated, and the thresholds are tuned to it. Real traffic will need retuning.
-- The identity guess for a dark vessel uses a straight line between fixes. Currents and a Kalman filter would do better.
-- Sentinel-1 misses most boats under 15 to 20 m, which is much of the Indian small-boat fleet. The IMBL warning depends on AIS, and many of those boats don't carry it.
-- Reviewing uses one shared analyst token. A real deployment needs individual accounts.
-- Scores are hand-weighted. Once enough alerts have been reviewed, those decisions should become training labels for a learned model.
-
-## Responsible use
-
-Public and synthetic data only. No imagery or analysis of military sites. The system tracks vessels and patterns, never individuals. The copilot is read-only, and every escalation is a person's decision with a written reason. [Global Fishing Watch](https://globalfishingwatch.org/our-apis/) data, if you add it, is free for non-commercial use only and must be credited.
-
-## Further reading in this repo
-
-- [DEPLOY.md](DEPLOY.md): putting your own copy online for free
-- [docs/adr](docs/adr): why things are built the way they are
